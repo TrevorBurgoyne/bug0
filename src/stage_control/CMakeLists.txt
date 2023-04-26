@@ -165,3 +165,7 @@ add_executable(stage_mover src/stage_mover.cxx)
 catkin_install_python(PROGRAMS src/stage_mover.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )  
+
+catkin_install_python(PROGRAMS src/bug0.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)  

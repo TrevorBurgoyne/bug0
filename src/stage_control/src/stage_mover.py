@@ -21,6 +21,8 @@ from geometry_msgs.msg import Twist
  *   
 """
 
+FORWARD_SPEED = 10
+
 def demo():
     # Name your node
     rospy.init_node("stage_mover", anonymous=True)
@@ -46,7 +48,7 @@ def demo():
             continue
         # move forward
         elif inp[0] == 'f': 
-            com.linear.x = 0.25
+            com.linear.x = FORWARD_SPEED
             com.angular.z = 0
         # turn left (yaw) and drive forward at the same time    
         elif inp[0] == 'l':
