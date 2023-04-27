@@ -71,7 +71,7 @@ class Bug0():
     def __init__(
         self, 
         left_turn: bool = True,
-        rate: int = 10,
+        rate: int = 50,
         speed: float = 10,
         spin_speed: float = 2,
         min_dist: float = 3,
@@ -89,7 +89,6 @@ class Bug0():
         self.min_dist = min_dist
         self.avoid_area = avoid_area # indicies of LaserScan ranges to consider
         
-        
         # Initial LaserScan values
         self.dist_ahead = None
         self.dist_right = None
@@ -105,12 +104,13 @@ class Bug0():
         self.y_goal = y_goal
         self.tol = tol # Tolerance for when to be considered at the goal
         self.end_theta_goal = theta_goal # The user-defined ending orientation
-        self.theta_goal = None
+        self.theta_goal = None # This is used to store the direction of the goal
 
         # Robot states
         self.com = Twist() # current command
         self.avoiding_obstacle = False # Whether we're currently trying to avoid an obstacle
         self.aligning_theta = False # Whether we're currently aligning with the theta_goal
+        self.theta_ambiguity = False # Flag for when theta and theta_goal are within tolerance, but have a diference of 2pi (ie, -pi and pi)
     
 
     def at_goal(self) -> bool:
@@ -123,11 +123,12 @@ class Bug0():
 
     def theta_aligned(self) -> bool:
         """Determine if the robot is pointing towards the goal."""
-        if self.theta_goal and self.theta:
+        if self.theta_ambiguity:
+            return True
+        elif self.theta_goal and self.theta:
             return abs(self.theta_goal - self.theta) < self.tol
         else:
             return False
-
 
 
     def laser_callback(self, msg: LaserScan):
@@ -186,7 +187,13 @@ class Bug0():
     def heading_feedback_control(self, kp: float = 0.5) -> float:
         """Compute the appropriate command angular velocity using proportional control."""
         if self.theta_goal is not None and self.theta is not None:
-            return kp*(self.theta_goal - self.theta)
+            # Catch case where theta_goal and theta are very close to pi, but one is negative and one is positive
+            if np.sign(self.theta_goal) != np.sign(self.theta) and abs(abs(self.theta_goal)-abs(self.theta)) < self.tol:
+                self.theta_ambiguity = True
+                return kp*abs(abs(self.theta_goal)-abs(self.theta))
+            else:
+                self.theta_ambiguity = False
+                return kp*(self.theta_goal - self.theta)
         else:
             return 0
 
@@ -225,7 +232,7 @@ class Bug0():
 
     def main_control_loop(self):
         """Run the bug0 routine."""
-        print("Starting bug0 algorithm...")
+        print("Running bug0 algorithm...")
         rospy.init_node("bug0", anonymous=True)
 
         # Publisher object that decides what kind of topic to publish and how fast.
@@ -258,7 +265,7 @@ class Bug0():
             # if self.avoiding_obstacle:
             #     rospy.loginfo("Avoiding...")
             
-            # Here's where we publish the actual message.
+            # Here's where we publish the current commands.
             cmd_vel_pub.publish(self.com)
             
             # Sleep for as long as needed to achieve the loop rate.
