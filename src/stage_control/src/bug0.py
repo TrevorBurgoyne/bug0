@@ -75,7 +75,7 @@ class Bug0():
         speed: float = 10,
         spin_speed: float = 2,
         min_dist: float = 3,
-        avoid_area: int = 40, 
+        avoid_area: int = 50, 
         x_goal: float = 0,
         y_goal: float = 0,
         theta_goal: float = np.pi,
@@ -136,20 +136,23 @@ class Bug0():
         n_rays = len(msg.ranges)
         ahead_idx = int(n_rays/2) # idx of the range corresponding to straight ahead
         self.dist_ahead = min(msg.ranges[ahead_idx-self.avoid_area:ahead_idx+self.avoid_area]) # distance straight ahead, in m
-
+        # rospy.loginfo(f"Dist ahead: {self.dist_ahead}")
+        
         # Find distance in the theta_goal direction
         if self.theta_goal and self.theta:
-            theta_idx = ahead_idx + int((self.theta_goal-self.theta) / msg.angle_increment)
+            # Catch case where theta_goal and theta are very close to pi, but one is negative and one is positive
+            if self.theta_ambiguous():
+                theta_idx = ahead_idx + int(abs(abs(self.theta_goal)-abs(self.theta)) / msg.angle_increment)
+            else:
+                theta_idx = ahead_idx + int((self.theta_goal-self.theta) / msg.angle_increment)
+
+            # Wrap around by 2pi if possible
             if theta_idx < 0:
-                # Try adding factor or 2pi
+                # Try adding factor of 2pi
                 theta_idx = ahead_idx + int((self.theta_goal-self.theta + 2*np.pi) / msg.angle_increment)
-                # rospy.loginfo(f"Theta_idx: {theta_idx}, added 2pi")
             elif theta_idx > n_rays:
-                # Try subtracting factor or 2pi
+                # Try subtracting factor of 2pi
                 theta_idx = ahead_idx + int((self.theta_goal-self.theta - 2*np.pi) / msg.angle_increment)
-                # rospy.loginfo(f"Theta_idx: {theta_idx}, subtracted 2pi")
-            # else:
-                # rospy.loginfo(f"Theta_idx: {theta_idx}")
 
             if theta_idx > 0 and theta_idx < n_rays:
                 # Avoid exceeding array limits
@@ -158,20 +161,18 @@ class Bug0():
                 try:
                     self.dist_theta = min(msg.ranges[avoid_area_start:avoid_area_end])
                 except ValueError:
-                    # Theta direction is in the Laser's blind spot
+                    # When we can't get a reading, assume that there's an obstacle
                     self.dist_theta = -np.inf
             else:
+                # When we can't get a reading, assume that there's an obstacle
                 self.dist_theta = -np.inf
             
-        # rospy.loginfo(f"Scan in theta dir: {self.dist_theta}")
-
 
     def odom_callback(self, msg: Odometry):
         """Get the distance to the closest obstacle in front of the robot, within the avoid_area."""
         # 2D Position
         self.x_location = msg.pose.pose.position.x
         self.y_location = msg.pose.pose.position.y
-        # rospy.loginfo(f"Robot is at x = {self.x_location}, y = {self.y_location}")
         
         # Robot Heading: in odometry this is reported as a quaternion, so convert to euler angle
         orientation_q = msg.pose.pose.orientation
@@ -181,21 +182,41 @@ class Bug0():
 
         # Compute desired heading
         self.theta_goal = math.atan2(self.y_goal-self.y_location, self.x_goal-self.x_location)
-        # rospy.loginfo(f"Robot is at heading = {self.theta}, goal at {self.theta_goal}")
+
+
+    def theta_ambiguous(self) -> bool:
+        """Check if theta is ambiguous, and if so set a flag."""
+        if (
+            self.theta_goal is not None and self.theta is not None and 
+            np.sign(self.theta_goal) != np.sign(self.theta) and 
+            (
+                (abs(self.theta_goal-np.pi) < self.tol and abs(self.theta-np.pi) < self.tol) or # Both close to +/- pi
+                (abs(self.theta_goal) < self.tol and abs(self.theta) < self.tol) # Both close to 0
+            )
+        ):
+            # Catch case where theta_goal and theta are very close to pi, but one is negative and one is positive
+            self.theta_ambiguity = True
+        else:
+            self.theta_ambiguity = False
+        
+        return self.theta_ambiguity
 
 
     def heading_feedback_control(self, kp: float = 0.5) -> float:
         """Compute the appropriate command angular velocity using proportional control."""
         if self.theta_goal is not None and self.theta is not None:
             # Catch case where theta_goal and theta are very close to pi, but one is negative and one is positive
-            if np.sign(self.theta_goal) != np.sign(self.theta) and abs(abs(self.theta_goal)-abs(self.theta)) < self.tol:
-                self.theta_ambiguity = True
+            if self.theta_ambiguous():
                 return kp*abs(abs(self.theta_goal)-abs(self.theta))
             else:
-                self.theta_ambiguity = False
-                return kp*(self.theta_goal - self.theta)
+                return kp*self.shortest_angle_distance()
         else:
             return 0
+
+
+    def shortest_angle_distance(self) -> float:
+        """Find the smallest magnitude angle between theta and theta_goal."""
+        return math.atan2(math.sin(self.theta_goal-self.theta), math.cos(self.theta_goal-self.theta))
 
 
     def obstacle_avoidance(self):
@@ -264,6 +285,8 @@ class Bug0():
             #     rospy.loginfo("Aligning...")
             # if self.avoiding_obstacle:
             #     rospy.loginfo("Avoiding...")
+            # if self.theta_ambiguity:
+            #     rospy.loginfo(f"Theta Ambiguity")
             
             # Here's where we publish the current commands.
             cmd_vel_pub.publish(self.com)
